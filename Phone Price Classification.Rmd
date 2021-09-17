@@ -1,0 +1,498 @@
+---
+title: "Phone Price Classification"
+author: "Sahitya Sundar Raj Vijayanagar"
+date: "27/07/2021"
+output: pdf_document
+---
+
+``` {r setup,include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+
+require(corrplot)
+require(MASS)
+require(tree)
+require(rpart)
+require(rpart.plot)
+
+mobile = read.csv('train.csv')
+
+set.seed(111)
+
+
+```
+
+# Convert categorical variables as factors
+
+
+``` {r a}
+
+attach(mobile)
+
+mobile$price_range <- as.factor(mobile$price_range)
+mobile$blue <- as.factor(mobile$blue)
+mobile$dual_sim <- as.factor(mobile$dual_sim)
+mobile$four_g <- as.factor(mobile$four_g)
+mobile$three_g <- as.factor(mobile$three_g)
+mobile$touch_screen <- as.factor(mobile$touch_screen)
+mobile$wifi <- as.factor(mobile$wifi)
+```
+
+# Fit a tree to mobile data just using ram and then prune it down to one with 4 leaves
+
+
+``` {r b}
+
+#first get a big tree using a small value of mindev
+temp = tree(price_range~ram,data=mobile,mindev=.0001)
+cat('first big tree size: \n')
+print(length(unique(temp$where)))
+
+#then prune it down to one with 4 leaves
+mobile.tree=prune.tree(temp,best=4)
+cat('pruned tree size: \n')
+print(length(unique(mobile.tree$where)))
+
+```
+
+
+# Plot the tree and the fits.
+
+``` {r c}
+
+par(mfrow=c(1,2))
+
+#plot the tree
+plot(mobile.tree,type="uniform")
+text(mobile.tree,col="blue",label=c("yval"),cex=.8)
+
+#plot data with fit
+mobile.fit = predict(mobile.tree) #get training fitted values
+
+pred <- apply(mobile.fit, 1, function(v) which.max(v)-1)
+
+plot(ram,price_range,cex=.5,pch=16) #plot data
+oo=order(ram)
+lines(ram[oo],pred[oo],col='red',lwd=3) #step function fit
+
+cvals=c(9.725,4.65,3.325,5.495,16.085,19.9) #cutpoints from tree
+for(i in 1:length(cvals)) abline(v=cvals[i],col='magenta',lty=2) #cutpoints
+```
+
+# Plot big tree using rpart
+``` {r d}
+## Fit a big tree to price_range~ram in the mobile pricing data using rpart instead of tree
+##  and using cross-validation.
+## Use rpart plotcp so do cross-validation.
+## Plot: rpart plotcp cross-validation.
+## Big off min loss cp value and plot tree for that cp value as well 
+## as a bigger cp value (smaller tree) and a smaller cp value (bigger tree).
+## Plot: the three trees (from the three cp values) as well as the fitted function.
+## Plot: the best tree using rpart.
+################################################################################
+
+#--------------------------------------------------
+#reduce df to just ram and price_range
+mdf = mobile[,c("ram","price_range")] #ram and price_range
+#--------------------------------------------------
+#fit a big tree using rpart.control
+big.tree = rpart(price_range~ram,method="class",data=mdf,
+                 control=rpart.control(minsplit=5,cp=.0005))
+nbig = length(unique(big.tree$where))
+cat('size of big tree: ',nbig,'\n')
+#--------------------------------------------------
+#look at cross-validation
+par(mfrow=c(1,1))
+plotcp(big.tree)
+
+```
+
+# Plot some trees using rpart
+
+``` {r e}
+#show fit from some trees
+
+oo=order(mdf$ram)
+bestcp=big.tree$cptable[which.min(big.tree$cptable[,"xerror"]),"CP"]
+cat('bestcp: ',bestcp,'\n')
+cpvec = c(.3333,bestcp,.001)
+par(mfrow=c(3,2))
+for(i in 1:3) {
+  plot(mdf,pch=16,col='blue',cex=.5)
+  ptree = prune(big.tree,cp=cpvec[i])
+  pfit = predict(ptree)
+  pred <- apply(pfit, 1, function(v) which.max(v))
+  lines(mdf$ram[oo],pred[oo],col='red',lwd=2)
+  title(paste('alpha = ',round(cpvec[i],3)))
+  plot(ptree,uniform=TRUE)
+  text(ptree,digits=4)
+}
+```
+
+# Plot best tree using rpart
+
+``` {r f}
+#plot best tree
+
+par(mfrow=c(1,1))
+best.tree = prune(big.tree,cp=bestcp)
+plot(best.tree,uniform=TRUE,branch=.2,margine=.2)
+text(best.tree,digits=4,use.n=TRUE,fancy=TRUE,bg='lightblue')
+
+```
+
+# Create a train-test set and fit the data using rplot() 
+
+``` {r g}
+
+mb <- mobile[,c('ram','price_range')] 
+
+set.seed(111)
+n=nrow(mb)
+
+#Split the date into 80% train, 20% test dataset
+n1=0.8*n
+n2=0.2*n
+ii = sample(1:n,n)
+mobiletrain= mb[ii[1:n1],]
+mobiletest = mb[ii[n1+1:n2],]
+
+fit <- rpart(price_range~ram, data = mobiletrain)
+rpart.plot(fit, extra = 101)
+
+predict_unseen <- predict(fit, mobiletest, type = 'class')
+
+# Confusion Matrix
+table_mat <- table(mobiletest$price_range, predict_unseen)
+table_mat
+
+accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+accuracy_Test
+
+print(paste('Accuracy for test', accuracy_Test))
+
+rpart.rules(fit)
+
+```
+
+
+# k-fold cross validation for Decision Trees using ram 
+
+``` {r h}
+#### k-fold cross validation for Decision Trees using ram ####
+
+rm(list = ls())
+
+set.seed(111)
+
+mobile = read.csv('train.csv')
+
+# Convert categorical variables as factors
+mobile$price_range <- as.factor(mobile$price_range)
+
+n = dim(mobile)[1]
+kcv = 10
+n0 = round(n/kcv,0)
+used = NULL
+set = 1:n
+
+cp_values = c(0.3333333333, 0.1940000000, 0.1580000000, 0.0018333333, 0.0016666667, 0.0015555556, 0.0013333333, 0.0011111111, 0.0010000000, 0.0008888889, 0.0006666667, 0.0005714286, 0.0005000000)
+
+train = mobile
+test = mobile
+out_acc = matrix(0,kcv,length(cp_values))
+
+accuracy_tune <- function(fit) {
+  predict_unseen <- predict(fit, mobiletest, type = 'class')
+  table_mat <- table(mobiletest$price_range, predict_unseen)
+  accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+  accuracy_Test
+}
+
+# Loop through 10 values of k for k-fold
+for(j in 1:kcv){
+  
+  if(n0<length(set)){val = sample(set,n0)}
+  if(n0>=length(set)){val=set}
+  
+  mobiletrain = train[-val,c('ram','price_range')]
+  mobiletest = test[val,c('ram','price_range')]
+  
+  # Loop through 13 values for complexity parameter
+  for(i in 1:length(cp_values)){
+    cat(cp_values[i],'\n')
+    control <- rpart.control(minsplit = 4,
+                             minbucket = round(5 / 3),
+                             maxdepth = 4,
+                             cp = cp_values[i])
+    
+    tune_fit <- rpart(price_range~ram, data = mobiletrain, method =  'class', control = control)
+    out_acc[j,i] = accuracy_tune(tune_fit)
+    
+  }
+  
+  used = union(used,val)
+  set = (1:n)[-used]
+  
+  cat(j,'\n')
+  
+}
+
+mAcc = apply(out_acc,2,mean)
+mAcc
+
+# Plot the complexity parameter vs Accuracy to identify best cp
+plot(log(1/cp_values),mAcc ,xlab="Complexity Parameter (cp)",ylab="out-of-sample Accuracy",col=4,lwd=2,type="l",cex.lab=1.2,main=paste("kfold(",kcv,") Accuracy:RAM(",max(mAcc),")"))
+best = which.max(mAcc)
+best
+cp_values[4]
+mAcc[4]
+text(log(1/cp_values[best])-0.6,mAcc[best]-0.04,paste("best cp=",cp_values[best]),col=2,cex=1.2)
+text(log(1/cp_values[1])+0.8,mAcc[1],paste("cp=",cp_values[1]),col=2,cex=1.2)
+text(log(1/cp_values[13])-0.2,mAcc[13]-0.01,paste("cp=",cp_values[13]),col=2,cex=1.2)
+
+```
+
+# k-fold cross validation for Decision Trees using ram, battery_power 
+
+``` {r i}
+#### k-fold cross validation for Decision Trees using ram, battery_power ####
+#############################################################################
+
+rm(list = ls())
+
+set.seed(111)
+
+mobile = read.csv('train.csv')
+
+# Convert categorical variables as factors
+mobile$price_range <- as.factor(mobile$price_range)
+
+n = dim(mobile)[1]
+kcv = 10
+n0 = round(n/kcv,0)
+used = NULL
+set = 1:n
+
+cp_values = c(0.3333333333, 0.1940000000, 0.1580000000, 0.0018333333, 0.0016666667, 0.0015555556, 0.0013333333, 0.0011111111, 0.0010000000, 0.0008888889, 0.0006666667, 0.0005714286, 0.0005000000)
+
+train = mobile
+test = mobile
+out_acc = matrix(0,kcv,length(cp_values))
+
+accuracy_tune <- function(fit) {
+  predict_unseen <- predict(fit, mobiletest, type = 'class')
+  table_mat <- table(mobiletest$price_range, predict_unseen)
+  accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+  accuracy_Test
+}
+
+# Loop through 10 values of k for k-fold
+for(j in 1:kcv){
+  
+  if(n0<length(set)){val = sample(set,n0)}
+  if(n0>=length(set)){val=set}
+  
+  mobiletrain = train[-val,c('ram','price_range','battery_power')]
+  mobiletest = test[val,c('ram','price_range','battery_power')]
+  
+  # Loop through 13 values for complexity parameter
+  for(i in 1:length(cp_values)){
+    cat(cp_values[i],'\n')
+    control <- rpart.control(minsplit = 4,
+                             minbucket = round(5 / 3),
+                             maxdepth = 4,
+                             cp = cp_values[i])
+    
+    tune_fit <- rpart(price_range~., data = mobiletrain, method = 'class', control = control)
+    out_acc[j,i] = accuracy_tune(tune_fit)
+    
+  }
+  
+  used = union(used,val)
+  set = (1:n)[-used]
+  
+  cat(j,'\n')
+  
+}
+
+mAcc = apply(out_acc,2,mean)
+mAcc
+
+# Plot the complexity parameter vs Accuracy to identify best cp
+plot(log(1/cp_values),mAcc ,xlab="Complexity Parameter (cp)",ylab="out-of-sample Accuracy",col=4,lwd=2,type="l",cex.lab=1.2,main=paste("kfold(",kcv,") Accuracy:RAM+Battery Power(",max(mAcc),")"))
+best = which.max(mAcc)
+best
+cp_values[4]
+mAcc[4]
+text(log(1/cp_values[best])-0.6,mAcc[best]-0.04,paste("best cp=",cp_values[best]),col=2,cex=1.2)
+text(log(1/cp_values[1])+0.8,mAcc[1],paste("cp=",cp_values[1]),col=2,cex=1.2)
+text(log(1/cp_values[13])-0.2,mAcc[13]-0.01,paste("cp=",cp_values[13]),col=2,cex=1.2)
+```
+
+# k-fold cross validation for Decision Trees using ram, battery_power, pixel_resolution
+
+``` {r j}
+###############################################################################################
+#### k-fold cross validation for Decision Trees using ram, battery_power, pixel_resolution ####
+###############################################################################################
+
+rm(list = ls())
+
+set.seed(111)
+
+mobile = read.csv('train.csv')
+
+# Convert categorical variables as factors
+mobile$price_range <- as.factor(mobile$price_range)
+
+mobile$pix_res = mobile$px_width*mobile$px_height
+
+n = dim(mobile)[1]
+kcv = 10
+n0 = round(n/kcv,0)
+used = NULL
+set = 1:n
+
+cp_values = c(0.3333333333, 0.1940000000, 0.1580000000, 0.0018333333, 0.0016666667, 0.0015555556, 0.0013333333, 0.0011111111, 0.0010000000, 0.0008888889, 0.0006666667, 0.0005714286, 0.0005000000)
+
+train = mobile
+test = mobile
+out_acc = matrix(0,kcv,length(cp_values))
+
+accuracy_tune <- function(fit) {
+  predict_unseen <- predict(fit, mobiletest, type = 'class')
+  table_mat <- table(mobiletest$price_range, predict_unseen)
+  accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+  accuracy_Test
+}
+
+# Loop through 10 values of k for k-fold
+for(j in 1:kcv){
+  
+  if(n0<length(set)){val = sample(set,n0)}
+  if(n0>=length(set)){val=set}
+  
+  mobiletrain = train[-val,c('ram','price_range','battery_power','pix_res')]
+  mobiletest = test[val,c('ram','price_range','battery_power','pix_res')]
+  
+  # Loop through 13 values for complexity parameter
+  for(i in 1:length(cp_values)){
+    cat(cp_values[i],'\n')
+    control <- rpart.control(minsplit = 4,
+                             minbucket = round(5 / 3),
+                             maxdepth = 4,
+                             cp = cp_values[i])
+    
+    tune_fit <- rpart(price_range~., data = mobiletrain, method = 'class', control = control)
+    out_acc[j,i] = accuracy_tune(tune_fit)
+    
+  }
+  
+  used = union(used,val)
+  set = (1:n)[-used]
+  
+  cat(j,'\n')
+  
+}
+
+mAcc = apply(out_acc,2,mean)
+mAcc
+
+# Plot the complexity parameter vs Accuracy to identify best cp
+plot(log(1/cp_values),mAcc ,xlab="Complexity Parameter (cp)",ylab="out-of-sample Accuracy",col=4,lwd=2,type="l",cex.lab=1.2,main=paste("kfold(",kcv,") Accuracy:RAM,Battery Power,Pixel Resolution(",max(mAcc),")"))
+best = which.max(mAcc)
+best
+cp_values[4]
+mAcc[4]
+text(log(1/cp_values[best])-0.6,mAcc[best]-0.04,paste("best cp=",cp_values[best]),col=2,cex=1.2)
+text(log(1/cp_values[1])+0.8,mAcc[1],paste("cp=",cp_values[1]),col=2,cex=1.2)
+text(log(1/cp_values[13])-0.2,mAcc[13]-0.01,paste("cp=",cp_values[13]),col=2,cex=1.2)
+
+```
+
+# k-fold cross validation for Decision Trees using all features
+
+``` {r k}
+#######################################################################
+#### k-fold cross validation for Decision Trees using all features ####
+#######################################################################
+
+rm(list = ls())
+
+set.seed(111)
+
+mobile = read.csv('train.csv')
+
+# Convert categorical variables as factors
+mobile$price_range <- as.factor(mobile$price_range)
+mobile$blue <- as.factor(mobile$blue)
+mobile$dual_sim <- as.factor(mobile$dual_sim)
+mobile$four_g <- as.factor(mobile$four_g)
+mobile$three_g <- as.factor(mobile$three_g)
+mobile$touch_screen <- as.factor(mobile$touch_screen)
+mobile$wifi <- as.factor(mobile$wifi)
+
+n = dim(mobile)[1]
+kcv = 10
+n0 = round(n/kcv,0)
+used = NULL
+set = 1:n
+
+cp_values = c(0.3333333333, 0.1940000000, 0.1580000000, 0.0018333333, 0.0016666667, 0.0015555556, 0.0013333333, 0.0011111111, 0.0010000000, 0.0008888889, 0.0006666667, 0.0005714286, 0.0005000000)
+
+train = mobile
+test = mobile
+out_acc = matrix(0,kcv,length(cp_values))
+
+accuracy_tune <- function(fit) {
+  predict_unseen <- predict(fit, mobiletest, type = 'class')
+  table_mat <- table(mobiletest$price_range, predict_unseen)
+  accuracy_Test <- sum(diag(table_mat)) / sum(table_mat)
+  accuracy_Test
+}
+
+# Loop through 10 values of k for k-fold
+for(j in 1:kcv){
+  
+  if(n0<length(set)){val = sample(set,n0)}
+  if(n0>=length(set)){val=set}
+  
+  mobiletrain = train[-val,]
+  mobiletest = test[val,]
+  
+  # Loop through 13 values for complexity parameter
+  for(i in 1:length(cp_values)){
+    cat(cp_values[i],'\n')
+    control <- rpart.control(minsplit = 4,
+                             minbucket = round(5 / 3),
+                             maxdepth = 4,
+                             cp = cp_values[i])
+    
+    tune_fit <- rpart(price_range~., data = mobiletrain, method = 'class', control = control)
+    out_acc[j,i] = accuracy_tune(tune_fit)
+    
+  }
+  
+  used = union(used,val)
+  set = (1:n)[-used]
+  
+  cat(j,'\n')
+  
+}
+
+mAcc = apply(out_acc,2,mean)
+mAcc
+
+# Plot the complexity parameter vs Accuracy to identify best cp
+plot(log(1/cp_values),mAcc ,xlab="Complexity Parameter (cp)",ylab="out-of-sample Accuracy",col=4,lwd=2,type="l",cex.lab=1.2,main=paste("kfold(",kcv,") Accuracy:All(",max(mAcc),")"))
+best = which.max(mAcc)
+best
+cp_values[4]
+mAcc[4]
+text(log(1/cp_values[best])-0.6,mAcc[best]-0.04,paste("best cp=",cp_values[best]),col=2,cex=1.2)
+text(log(1/cp_values[1])+0.8,mAcc[1],paste("cp=",cp_values[1]),col=2,cex=1.2)
+text(log(1/cp_values[13])-0.2,mAcc[13]-0.01,paste("cp=",cp_values[13]),col=2,cex=1.2)
+
+```
